@@ -17,3 +17,15 @@ def fetch_new_bonds():
     except requests.exceptions.RequestException as e:
         print(f"[ERROR] 获取新债数据失败: {e}")
         return [], str(e)
+
+
+def get_bond_names(bonds):
+    """从新债列表中提取名称，用于推送消息。"""
+    names = []
+    for bond in bonds:
+        # 集思录返回的字段可能是 bond_name 或 name
+        name = bond.get("bond_name") or bond.get("name", "未知新债")
+        names.append(name)
+    return names
+
+

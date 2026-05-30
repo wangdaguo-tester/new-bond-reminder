@@ -1,3 +1,4 @@
+import os
 import requests
 
 
@@ -32,3 +33,46 @@ def get_bond_names(bonds):
     return names
 
 
+def send_notification(bond_names):
+    """通过 Server酱 推送到微信。"""
+    sendkey = os.getenv("SENDKEY")
+    if not sendkey:
+        print("[ERROR] 未设置 SENDKEY 环境变量，无法推送")
+        return False
+
+    url = f"https://sctapi.ftqq.com/{sendkey}.send"
+    payload = {
+        "title": "今日有新债可申购！",
+        "desp": "、".join(bond_names),
+    }
+    try:
+        resp = requests.post(url, data=payload, timeout=30)
+        resp.raise_for_status()
+        result = resp.json()
+        if result.get("code") == 0:
+            print(f"[INFO] 推送成功: {payload['desp']}")
+            return True
+        else:
+            print(f"[ERROR] 推送失败: {result}")
+            return False
+    except requests.exceptions.RequestException as e:
+        print(f"[ERROR] 推送异常: {e}")
+        return False
+
+
+def main():
+    print("[INFO] 开始检查今日新债...")
+    bonds, error = fetch_new_bonds()
+    if error:
+        print(f"[ERROR] 获取新债数据失败: {error}，不推送")
+        return
+    if not bonds:
+        print("[INFO] 今日无新债可申购，不推送")
+        return
+    names = get_bond_names(bonds)
+    print(f"[INFO] 发现新债: {names}")
+    send_notification(names)
+
+
+if __name__ == "__main__":
+    main()

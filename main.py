@@ -1,10 +1,11 @@
 import os
 import requests
+from datetime import date
 
 
 def fetch_new_bonds():
     """从集思录获取当日可申购的新债列表。返回空列表表示今天没有新债。"""
-    url = "https://www.jisilu.cn/data/calendar/bond/"
+    url = "https://www.jisilu.cn/data/cbnew/pre_list/"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     }
@@ -12,9 +13,14 @@ def fetch_new_bonds():
         resp = requests.get(url, headers=headers, timeout=30)
         resp.raise_for_status()
         data = resp.json()
-        # 集思录返回的数据结构为 {"data": {"bond_list": [...]}}
-        bonds = data.get("data", {}).get("bond_list", [])
-        return bonds, None
+        today = date.today().strftime("%Y-%m-%d")
+        all_rows = data.get("rows", [])
+        # 只保留申购日期为今天的新债
+        today_bonds = [
+            row for row in all_rows
+            if row.get("cell", {}).get("apply_date") == today
+        ]
+        return today_bonds, None
     except requests.exceptions.RequestException as e:
         return [], str(e)
 
@@ -26,8 +32,8 @@ def get_bond_names(bonds):
         bonds, _ = bonds
     names = []
     for bond in bonds:
-        # 集思录返回的字段可能是 bond_name 或 name
-        name = bond.get("bond_name") if bond.get("bond_name") is not None else bond.get("name", "未知新债")
+        # 集思录返回的数据结构为 {"cell": {"bond_nm": "XX转债", ...}}
+        name = bond.get("cell", {}).get("bond_nm", "未知新债")
         names.append(name)
     return names
 

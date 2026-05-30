@@ -21,10 +21,13 @@ def fetch_new_bonds():
 
 def get_bond_names(bonds):
     """从新债列表中提取名称，用于推送消息。"""
+    # 兼容处理：如果传入的是 fetch_new_bonds() 的返回值 (list, error)，自动解包
+    if isinstance(bonds, tuple):
+        bonds, _ = bonds
     names = []
     for bond in bonds:
         # 集思录返回的字段可能是 bond_name 或 name
-        name = bond.get("bond_name") or bond.get("name", "未知新债")
+        name = bond.get("bond_name") if bond.get("bond_name") is not None else bond.get("name", "未知新债")
         names.append(name)
     return names
 

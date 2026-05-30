@@ -13,7 +13,7 @@ def fetch_new_bonds():
         data = resp.json()
         # 集思录返回的数据结构为 {"data": {"bond_list": [...]}}
         bonds = data.get("data", {}).get("bond_list", [])
-        return bonds
-    except Exception as e:
+        return bonds, None
+    except requests.exceptions.RequestException as e:
         print(f"[ERROR] 获取新债数据失败: {e}")
-        return []
+        return [], str(e)

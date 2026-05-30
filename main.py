@@ -16,7 +16,6 @@ def fetch_new_bonds():
         bonds = data.get("data", {}).get("bond_list", [])
         return bonds, None
     except requests.exceptions.RequestException as e:
-        print(f"[ERROR] 获取新债数据失败: {e}")
         return [], str(e)
 
 
@@ -65,14 +64,16 @@ def main():
     bonds, error = fetch_new_bonds()
     if error:
         print(f"[ERROR] 获取新债数据失败: {error}，不推送")
-        return
+        return 1
     if not bonds:
         print("[INFO] 今日无新债可申购，不推送")
-        return
+        return 0
     names = get_bond_names(bonds)
     print(f"[INFO] 发现新债: {names}")
-    send_notification(names)
+    ok = send_notification(names)
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    sys.exit(main())

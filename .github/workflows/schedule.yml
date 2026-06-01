@@ -2,9 +2,12 @@ name: 打新债提醒
 
 on:
   schedule:
-    # UTC 1:00 = 北京时间 9:00, 周一到周五
+    # UTC 1:00 = 北京时间 9:00, 周一到周五（作为兜底，GitHub 调度可能延迟）
     - cron: "0 1 * * 1-5"
   workflow_dispatch:
+  repository_dispatch:
+    types:
+      - check-new-bonds
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true

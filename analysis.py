@@ -2,7 +2,9 @@
 
 import json
 import os
+import re
 import requests
+import openai
 from openai import OpenAI
 
 
@@ -191,11 +193,10 @@ def analyze(new_bonds, config):
         )
         raw = response.choices[0].message.content.strip()
 
-        # 去掉可能的 markdown 代码块标记
-        if raw.startswith("```"):
-            raw = raw.split("\n", 1)[-1]  # 去掉第一行 ```json
-            if raw.endswith("```"):
-                raw = raw[:-3]  # 去掉末尾 ```
+        # 用正则提取第一个 fenced code block，容错 preamble 和 trailing whitespace
+        match = re.search(r'```(?:json)?\s*\n(.*?)```', raw, re.DOTALL)
+        if match:
+            raw = match.group(1).strip()
 
         result = json.loads(raw)
         return result.get("analyses", [])
@@ -203,6 +204,6 @@ def analyze(new_bonds, config):
     except (json.JSONDecodeError, KeyError) as e:
         print(f"[WARN] DeepSeek 返回格式解析失败: {e}")
         return None
-    except Exception as e:
+    except (openai.APIConnectionError, openai.APIStatusError, openai.APITimeoutError) as e:
         print(f"[WARN] DeepSeek API 调用失败: {e}")
         return None

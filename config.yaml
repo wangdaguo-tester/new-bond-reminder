@@ -1,0 +1,29 @@
+# ===========================================
+# 打新债提醒 - 用户配置文件
+# ===========================================
+
+# 你的基金/股票持仓（手动维护）
+portfolio:
+  - name: "沪深300ETF"
+    type: "stock_etf"        # stock_etf / bond_fund / mixed_fund / stock / cash
+    code: "510300"
+    weight: 0.3              # 占总投资比例
+
+  - name: "混合基金"
+    type: "mixed_fund"
+    code: "xxxxxx"
+    weight: 0.5
+
+  - name: "现金"
+    type: "cash"
+    weight: 0.2
+
+# 风控偏好
+risk:
+  max_position_ratio: 0.3    # 单只新债不超过总资金的 30%
+  stop_loss: -0.05           # 最大亏损 5%
+
+# AI 分析设置
+analysis:
+  enabled: true              # false = 关闭 AI，纯推送新债名称
+  model: "deepseek-chat"     # deepseek-chat 或 deepseek-reasoner

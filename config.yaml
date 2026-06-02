@@ -1,8 +1,10 @@
 # ===========================================
 # 打新债提醒 - 用户配置文件
+# 用于配置持仓组合、风控参数和 AI 分析选项
 # ===========================================
 
 # 你的基金/股票持仓（手动维护）
+# 注意：所有持仓的 weight 之和应为 1.0
 portfolio:
   - name: "沪深300ETF"
     type: "stock_etf"        # stock_etf / bond_fund / mixed_fund / stock / cash
@@ -11,11 +13,11 @@ portfolio:
 
   - name: "混合基金"
     type: "mixed_fund"
-    code: "xxxxxx"
+    code: "YOUR_FUND_CODE_HERE"  # TODO: 替换为你的基金代码
     weight: 0.5
 
   - name: "现金"
-    type: "cash"
+    type: "cash"              # 现金无需代码
     weight: 0.2
 
 # 风控偏好

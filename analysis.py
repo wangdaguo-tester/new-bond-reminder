@@ -150,3 +150,59 @@ score 为 1-10 的整数。
 只输出 JSON，不要输出其他内容。"""
 
     return prompt
+
+
+def analyze(new_bonds, config):
+    """对今日新债执行 AI 分析，返回每只债的分析结果。
+
+    Args:
+        new_bonds: fetch_new_bonds() 返回的今日新债列表
+        config: 从 config.yaml 加载的完整配置 dict
+
+    Returns:
+        list[dict]: [{"bond_name": "...", "score": 7, "suggestion": "...", "reason": "..."}, ...]
+        None: AI 不可用或分析失败时
+    """
+    api_key = os.getenv("DEEPSEEK_API_KEY")
+    if not api_key:
+        print("[WARN] 未设置 DEEPSEEK_API_KEY，跳过 AI 分析")
+        return None
+
+    portfolio = config.get("portfolio", [])
+    risk = config.get("risk", {})
+    model = config.get("analysis", {}).get("model", "deepseek-chat")
+
+    prompt = build_prompt(new_bonds, portfolio, risk)
+
+    client = OpenAI(
+        api_key=api_key,
+        base_url="https://api.deepseek.com/v1",
+    )
+
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": "你是一个专业的可转债分析助手。请只输出 JSON，不要输出其他内容。"},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.3,
+            timeout=120,
+        )
+        raw = response.choices[0].message.content.strip()
+
+        # 去掉可能的 markdown 代码块标记
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[-1]  # 去掉第一行 ```json
+            if raw.endswith("```"):
+                raw = raw[:-3]  # 去掉末尾 ```
+
+        result = json.loads(raw)
+        return result.get("analyses", [])
+
+    except (json.JSONDecodeError, KeyError) as e:
+        print(f"[WARN] DeepSeek 返回格式解析失败: {e}")
+        return None
+    except Exception as e:
+        print(f"[WARN] DeepSeek API 调用失败: {e}")
+        return None

@@ -7,31 +7,33 @@ from datetime import date
 from analysis import analyze
 
 
+_DEFAULT_CONFIG = {
+    "portfolio": [],
+    "risk": {"max_position_ratio": 0.3, "stop_loss": -0.05},
+    "analysis": {"enabled": False, "model": "deepseek-chat"},
+}
+
+
 def load_config(config_path="config.yaml"):
     """加载用户配置文件，文件不存在或格式错误时返回默认空配置。"""
     if not os.path.exists(config_path):
         print("[WARN] config.yaml 不存在，使用默认空配置（关闭 AI 分析）")
-        return {
-            "portfolio": [],
-            "risk": {"max_position_ratio": 0.3, "stop_loss": -0.05},
-            "analysis": {"enabled": False, "model": "deepseek-chat"},
-        }
+        return dict(_DEFAULT_CONFIG)
     try:
         with open(config_path, "r", encoding="utf-8") as f:
             config = yaml.safe_load(f)
         if not isinstance(config, dict):
             raise ValueError("config.yaml 内容非字典格式")
-        config.setdefault("portfolio", [])
-        config.setdefault("risk", {"max_position_ratio": 0.3, "stop_loss": -0.05})
-        config.setdefault("analysis", {"enabled": False, "model": "deepseek-chat"})
+        config.setdefault("portfolio", _DEFAULT_CONFIG["portfolio"])
+        config.setdefault("risk", _DEFAULT_CONFIG["risk"])
+        config.setdefault("analysis", _DEFAULT_CONFIG["analysis"])
+        # Deep-merge nested defaults
+        config["risk"] = {**_DEFAULT_CONFIG["risk"], **config.get("risk", {})}
+        config["analysis"] = {**_DEFAULT_CONFIG["analysis"], **config.get("analysis", {})}
         return config
     except (yaml.YAMLError, ValueError) as e:
         print(f"[WARN] config.yaml 解析失败: {e}，使用默认空配置")
-        return {
-            "portfolio": [],
-            "risk": {"max_position_ratio": 0.3, "stop_loss": -0.05},
-            "analysis": {"enabled": False, "model": "deepseek-chat"},
-        }
+        return dict(_DEFAULT_CONFIG)
 
 
 def fetch_new_bonds():

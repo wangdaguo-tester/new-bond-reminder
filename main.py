@@ -68,7 +68,7 @@ def get_bond_names(bonds):
     return names
 
 
-def send_notification(bond_names, analyses=None):
+def send_notification(bond_names, analyses=None, bonds=None):
     """通过 Server酱 推送到微信。analyses 为 AI 分析结果列表。"""
     sendkey = os.getenv("SENDKEY")
     if not sendkey:
@@ -77,6 +77,14 @@ def send_notification(bond_names, analyses=None):
 
     today_str = date.today().strftime("%Y-%m-%d")
 
+    bond_info = {}
+    if bonds:
+        for b in bonds:
+            cell = b.get("cell", {})
+            nm = cell.get("bond_nm", "")
+            if nm:
+                bond_info[nm] = cell
+
     if analyses:
         lines = ["🏦 今日有新债可申购！\n"]
         for a in analyses:
@@ -84,7 +92,11 @@ def send_notification(bond_names, analyses=None):
             suggestion = a.get("suggestion", "未知")
             reason = a.get("reason", "")
             bond_name = a.get("bond_name", "未知转债")
+            cell = bond_info.get(bond_name, {})
+            stock_nm = cell.get("stock_nm", "未知")
+            convert_price = cell.get("convert_price", "未公布")
             lines.append(f"📊 {bond_name}")
+            lines.append(f"   正股：{stock_nm} | 转股价：{convert_price}")
             lines.append(f"   🤖 AI评分：{score}/10 — {suggestion}")
             lines.append(f"   💡 {reason}")
             lines.append("")
@@ -95,7 +107,9 @@ def send_notification(bond_names, analyses=None):
         title = "🏦 今日有新债可申购！"
         lines = ["🏦 今日有新债可申购！\n"]
         for name in bond_names:
-            lines.append(f"📊 {name}")
+            cell = bond_info.get(name, {})
+            stock_nm = cell.get("stock_nm", "未知")
+            lines.append(f"📊 {name} | 正股：{stock_nm}")
         if bond_names:
             lines.append(f"\n⚠️ AI 分析暂时不可用，请自行判断")
         lines.append(f"\n📅 申购日期：{today_str}")
@@ -138,7 +152,7 @@ def main():
             print(f"[INFO] AI 分析完成: {len(analyses)} 只新债")
         else:
             print("[WARN] AI 分析失败，降级为基础推送")
-    ok = send_notification(names, analyses)
+    ok = send_notification(names, analyses, bonds)
     return 0 if ok else 1
 
 

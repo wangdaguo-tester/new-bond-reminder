@@ -59,8 +59,8 @@ def _build_portfolio_summary(portfolio):
             "mixed_fund": "混合基金", "stock": "个股", "cash": "现金"
         }.get(item.get("type", ""), "未知")
         lines.append(
-            f"- {item['name']}（{type_label}，代码 {item['code']}"
-            f"，占比 {item['weight'] * 100:.0f}%）"
+            f"- {item.get('name', '未知')}（{type_label}，代码 {item.get('code', 'N/A')}"
+            f"，占比 {item.get('weight', 0) * 100:.0f}%）"
         )
     return "\n".join(lines)
 
@@ -78,7 +78,7 @@ def _build_bond_line(bond_info, market_data):
     if market_data:
         price = market_data.get("price", 0)
         premium = 0
-        if price > 0 and isinstance(convert_price, (int, float)) and convert_price > 0:
+        if isinstance(price, (int, float)) and price > 0 and isinstance(convert_price, (int, float)) and convert_price > 0:
             # 转股价值 = (正股价 / 转股价) * 100
             convert_value = (price / convert_price) * 100
             premium = round((100 - convert_value) / convert_value * 100, 1)

@@ -1,3 +1,4 @@
+import copy
 import os
 import sys
 import requests
@@ -18,7 +19,7 @@ def load_config(config_path="config.yaml"):
     """加载用户配置文件，文件不存在或格式错误时返回默认空配置。"""
     if not os.path.exists(config_path):
         print("[WARN] config.yaml 不存在，使用默认空配置（关闭 AI 分析）")
-        return dict(_DEFAULT_CONFIG)
+        return copy.deepcopy(_DEFAULT_CONFIG)
     try:
         with open(config_path, "r", encoding="utf-8") as f:
             config = yaml.safe_load(f)
@@ -33,7 +34,7 @@ def load_config(config_path="config.yaml"):
         return config
     except (yaml.YAMLError, ValueError) as e:
         print(f"[WARN] config.yaml 解析失败: {e}，使用默认空配置")
-        return dict(_DEFAULT_CONFIG)
+        return copy.deepcopy(_DEFAULT_CONFIG)
 
 
 def fetch_new_bonds():

@@ -13,7 +13,7 @@ portfolio:
 
   - name: "混合基金"
     type: "mixed_fund"
-    code: "YOUR_FUND_CODE_HERE"  # TODO: 替换为你的基金代码
+    code: "027127"  # TODO: 替换为你的基金代码
     weight: 0.5
 
   - name: "现金"

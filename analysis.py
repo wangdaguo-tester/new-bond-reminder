@@ -48,3 +48,105 @@ def get_market_data(stock_code):
         }
     except (requests.RequestException, ValueError):
         return None
+
+
+def _build_portfolio_summary(portfolio):
+    """将持仓列表转为 AI 可读的文本摘要。"""
+    lines = []
+    for item in portfolio:
+        type_label = {
+            "stock_etf": "股票ETF", "bond_fund": "债券基金",
+            "mixed_fund": "混合基金", "stock": "个股", "cash": "现金"
+        }.get(item.get("type", ""), "未知")
+        lines.append(
+            f"- {item['name']}（{type_label}，代码 {item['code']}"
+            f"，占比 {item['weight'] * 100:.0f}%）"
+        )
+    return "\n".join(lines)
+
+
+def _build_bond_line(bond_info, market_data):
+    """为单个新债构建一行描述文本。"""
+    cell = bond_info.get("cell", {})
+    bond_nm = cell.get("bond_nm", "未知转债")
+    stock_nm = cell.get("stock_nm", "未知")
+    convert_price = cell.get("convert_price", "未公布")
+    scale = cell.get("issue_size", "未公布")
+
+    line = f"- {bond_nm} | 正股: {stock_nm} | 转股价: {convert_price} | 规模: {scale}亿"
+
+    if market_data:
+        price = market_data.get("price", 0)
+        premium = 0
+        if price > 0 and isinstance(convert_price, (int, float)) and convert_price > 0:
+            # 转股价值 = (正股价 / 转股价) * 100
+            convert_value = (price / convert_price) * 100
+            premium = round((100 - convert_value) / convert_value * 100, 1)
+        line += f" | 正股价: {price}元 | 溢价率: {premium}%"
+    else:
+        line += " | 正股价: 暂无 | 溢价率: 暂无（行情数据缺失）"
+
+    return line
+
+
+def build_prompt(bonds, portfolio, risk):
+    """构建发送给 DeepSeek 的分析 prompt。
+
+    Args:
+        bonds: 新债列表（集思录 raw rows）
+        portfolio: config.yaml 中的 portfolio 列表
+        risk: config.yaml 中的 risk dict
+
+    Returns:
+        str: 完整 prompt
+    """
+    summary = _build_portfolio_summary(portfolio)
+    bond_lines = []
+    for bond in bonds:
+        cell = bond.get("cell", {})
+        stock_cd = cell.get("stock_cd", "")
+        market_data = get_market_data(stock_cd) if stock_cd else None
+        bond_lines.append(_build_bond_line(bond, market_data))
+
+    bonds_text = "\n".join(bond_lines)
+
+    prompt = f"""你是一个专业的可转债分析助手，擅长从正股质地、转股价值、市场情绪等维度评估新债申购价值。
+
+## 用户持仓概览
+{summary}
+
+## 风控约束
+- 最大可接受亏损：{risk.get('stop_loss', -0.05) * 100:.0f}%
+- 单只新债不超过总资金：{risk.get('max_position_ratio', 0.3) * 100:.0f}%
+
+## 今日新债
+{bonds_text}
+
+## 分析要求
+请从以下维度逐只分析并给出申购建议：
+1. 正股质地（行业前景、基本面状况）
+2. 转股价值与溢价率（当前是否有利）
+3. 发行规模与中签率预估
+4. 与用户现有持仓的相关性（是否过度集中）
+
+## 输出格式
+严格按照以下 JSON 格式输出，每只新债一个对象：
+
+```json
+{{
+  "analyses": [
+    {{
+      "bond_name": "XX转债",
+      "score": 7,
+      "suggestion": "强力申购",
+      "reason": "正股基本面良好，溢价率合理，建议参与申购"
+    }}
+  ]
+}}
+```
+
+suggestion 必须是以下三个值之一："强力申购"、"谨慎申购"、"放弃申购"。
+score 为 1-10 的整数。
+只输出 JSON，不要输出其他内容。"""
+
+    return prompt

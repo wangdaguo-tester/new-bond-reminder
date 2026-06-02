@@ -16,6 +16,10 @@ def get_market_data(stock_code):
         dict: {"price": 1850.00, "change_pct": 2.50, "pe": 35.2, "pb": 8.1}
         None: 请求失败时
     """
+    # Early validation: must be a 6-character numeric string
+    if not isinstance(stock_code, str) or len(stock_code) != 6 or not stock_code.isdigit():
+        return None
+
     # 判断交易所：6开头=上海(1)，其他=深圳(0)
     market = "1" if stock_code.startswith("6") else "0"
     secid = f"{market}.{stock_code}"
@@ -37,10 +41,10 @@ def get_market_data(stock_code):
             return None
 
         return {
-            "price": data.get("f43", 0) / 100 if data.get("f43") else 0,      # 分→元
-            "change_pct": data.get("f170", 0) / 100 if data.get("f170") else 0,  # 基点→百分比
+            "price": data.get("f43", 0) / 100 if data.get("f43") else None,      # 分→元
+            "change_pct": data.get("f170", 0) / 100 if data.get("f170") else None,  # 基点→百分比
             "pe": data.get("f167", 0) / 100 if data.get("f167") else None,      # PE TTM
             "pb": data.get("f46", 0) / 100 if data.get("f46") else None,        # PB
         }
-    except (requests.RequestException, ValueError, KeyError):
+    except (requests.RequestException, ValueError):
         return None

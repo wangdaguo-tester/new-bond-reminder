@@ -1,0 +1,6 @@
+name = "bond-reminder-trigger"
+main = "trigger.js"
+compatibility_date = "2026-07-17"
+
+[triggers]
+crons = ["57 0 * * 1-5"]

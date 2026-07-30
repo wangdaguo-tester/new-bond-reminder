@@ -29,8 +29,8 @@ risk:
 notifications:
   sendkeys:
     - "SCT387450TPQJ0X0EqmHSXSCItqwEFdKyy"
-    # 如需添加更多接收人，在上面列表中添加新的 SendKey
-    # 旧的 SENDKEY 环境变量仍然作为兜底
+    # 如需添加更多接收人，在上面的 SendKey 列表中添加
+    # SENDKEY 环境变量会自动合并（无需单独添加到此处）
 
 # AI 分析设置
 analysis:

@@ -87,11 +87,10 @@ def send_notification(bond_names, analyses=None, bonds=None, sendkeys=None):
     if sendkeys is None:
         sendkeys = []
 
-    # fallback: config 里没配 sendkeys 时，用旧的 SENDKEY 环境变量
-    if not sendkeys:
-        env_key = os.getenv("SENDKEY")
-        if env_key:
-            sendkeys = [env_key]
+    # 自动合并环境变量 SENDKEY（去重，保留兼容）
+    env_key = os.getenv("SENDKEY")
+    if env_key and env_key not in sendkeys:
+        sendkeys.append(env_key)
 
     if not sendkeys:
         print("[ERROR] 未设置任何 SendKey，无法推送")

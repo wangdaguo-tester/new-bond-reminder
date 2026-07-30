@@ -25,6 +25,13 @@ risk:
   max_position_ratio: 0.3    # 单只新债不超过总资金的 30%
   stop_loss: -0.05           # 最大亏损 5%
 
+# 微信推送通知设置
+notifications:
+  sendkeys:
+    - "SCT387450TPQJ0X0EqmHSXSCItqwEFdKyy"
+    # 如需添加更多接收人，在上面列表中添加新的 SendKey
+    # 旧的 SENDKEY 环境变量仍然作为兜底
+
 # AI 分析设置
 analysis:
   enabled: true              # false = 关闭 AI，纯推送新债名称

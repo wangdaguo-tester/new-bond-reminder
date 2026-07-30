@@ -12,6 +12,7 @@ _DEFAULT_CONFIG = {
     "portfolio": [],
     "risk": {"max_position_ratio": 0.3, "stop_loss": -0.05},
     "analysis": {"enabled": False, "model": "deepseek-chat"},
+    "notifications": {"sendkeys": []},
 }
 
 
@@ -28,9 +29,11 @@ def load_config(config_path="config.yaml"):
         config.setdefault("portfolio", _DEFAULT_CONFIG["portfolio"])
         config.setdefault("risk", _DEFAULT_CONFIG["risk"])
         config.setdefault("analysis", _DEFAULT_CONFIG["analysis"])
+        config.setdefault("notifications", _DEFAULT_CONFIG["notifications"])
         # Deep-merge nested defaults
         config["risk"] = {**_DEFAULT_CONFIG["risk"], **config.get("risk", {})}
         config["analysis"] = {**_DEFAULT_CONFIG["analysis"], **config.get("analysis", {})}
+        config["notifications"] = {**_DEFAULT_CONFIG["notifications"], **config.get("notifications", {})}
         return config
     except (yaml.YAMLError, ValueError) as e:
         print(f"[WARN] config.yaml 解析失败: {e}，使用默认空配置")
@@ -69,11 +72,29 @@ def get_bond_names(bonds):
     return names
 
 
-def send_notification(bond_names, analyses=None, bonds=None):
-    """通过 Server酱 推送到微信。analyses 为 AI 分析结果列表。"""
-    sendkey = os.getenv("SENDKEY")
-    if not sendkey:
-        print("[ERROR] 未设置 SENDKEY 环境变量，无法推送")
+def send_notification(bond_names, analyses=None, bonds=None, sendkeys=None):
+    """通过 Server酱 推送到微信。支持多个 sendkey，逐个推送。
+
+    Args:
+        bond_names: 新债名称列表
+        analyses: AI 分析结果列表
+        bonds: 新债原始数据
+        sendkeys: SendKey 列表，为空时 fallback 到 SENDKEY 环境变量
+
+    Returns:
+        bool: 至少一个推送成功即为 True
+    """
+    if sendkeys is None:
+        sendkeys = []
+
+    # fallback: config 里没配 sendkeys 时，用旧的 SENDKEY 环境变量
+    if not sendkeys:
+        env_key = os.getenv("SENDKEY")
+        if env_key:
+            sendkeys = [env_key]
+
+    if not sendkeys:
+        print("[ERROR] 未设置任何 SendKey，无法推送")
         return False
 
     today_str = date.today().strftime("%Y-%m-%d")
@@ -116,20 +137,27 @@ def send_notification(bond_names, analyses=None, bonds=None):
         lines.append(f"\n📅 申购日期：{today_str}")
         desp = "\n".join(lines)
 
-    url = f"https://sctapi.ftqq.com/{sendkey}.send"
+    url = "https://sctapi.ftqq.com/{sendkey}.send"
     payload = {"title": title, "desp": desp}
-    try:
-        resp = requests.post(url, data=payload, timeout=30)
-        resp.raise_for_status()
-        result = resp.json()
-        if result.get("code") == 0:
-            print(f"[INFO] 推送成功: {payload['title']}")
-            return True
-        else:
-            print(f"[ERROR] 推送失败: {result}")
-            return False
-    except requests.exceptions.RequestException as e:
-        print(f"[ERROR] 推送异常: {e}")
+    success_count = 0
+    for sk in sendkeys:
+        try:
+            resp = requests.post(url.format(sendkey=sk), data=payload, timeout=30)
+            resp.raise_for_status()
+            result = resp.json()
+            if result.get("code") == 0:
+                print(f"[INFO] 推送成功 (SendKey: {sk[:12]}...): {payload['title']}")
+                success_count += 1
+            else:
+                print(f"[ERROR] 推送失败 (SendKey: {sk[:12]}...): {result}")
+        except requests.exceptions.RequestException as e:
+            print(f"[ERROR] 推送异常 (SendKey: {sk[:12]}...): {e}")
+
+    if success_count > 0:
+        print(f"[INFO] 推送完成: {success_count}/{len(sendkeys)} 成功")
+        return True
+    else:
+        print(f"[ERROR] 全部推送失败: 0/{len(sendkeys)}")
         return False
 
 
@@ -153,7 +181,7 @@ def main():
             print(f"[INFO] AI 分析完成: {len(analyses)} 只新债")
         else:
             print("[WARN] AI 分析失败，降级为基础推送")
-    ok = send_notification(names, analyses, bonds)
+    ok = send_notification(names, analyses, bonds, config.get("notifications", {}).get("sendkeys", []))
     return 0 if ok else 1
 
 

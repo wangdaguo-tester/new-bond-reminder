@@ -10,6 +10,7 @@ from analysis import analyze
 
 _DEFAULT_CONFIG = {
     "analysis": {"enabled": False, "model": "deepseek-chat"},
+    "notifications": {"sendkeys": []},
 }
 
 
@@ -19,6 +20,21 @@ def _cell_of(row):
         return {}
     cell = row.get("cell")
     return cell if isinstance(cell, dict) else {}
+
+
+def _merge_section(config, section):
+    """把用户配置的某个段落与默认值合并。
+
+    类型写错时回退默认值并告警，而不是让 ** 展开抛 TypeError 崩掉整个脚本。
+    """
+    user_value = config.get(section)
+    if isinstance(user_value, dict):
+        config[section] = {**_DEFAULT_CONFIG[section], **user_value}
+    else:
+        if user_value is not None:
+            print(f"[WARN] config.yaml 中 {section} 应为字典，"
+                  f"实际为 {type(user_value).__name__}，已回退默认值")
+        config[section] = dict(_DEFAULT_CONFIG[section])
 
 
 def load_config(config_path="config.yaml"):
@@ -32,15 +48,8 @@ def load_config(config_path="config.yaml"):
         if not isinstance(config, dict):
             raise ValueError("config.yaml 内容非字典格式")
 
-        # 与默认值合并；类型写错时回退默认值，而不是让 ** 展开直接崩溃
-        user_analysis = config.get("analysis")
-        if isinstance(user_analysis, dict):
-            config["analysis"] = {**_DEFAULT_CONFIG["analysis"], **user_analysis}
-        else:
-            if user_analysis is not None:
-                print(f"[WARN] config.yaml 中 analysis 应为字典，"
-                      f"实际为 {type(user_analysis).__name__}，已回退默认值")
-            config["analysis"] = dict(_DEFAULT_CONFIG["analysis"])
+        for section in ("analysis", "notifications"):
+            _merge_section(config, section)
 
         return config
     except (yaml.YAMLError, ValueError, OSError) as e:
@@ -144,36 +153,51 @@ def build_message(bonds, analyses=None):
     return title, "\n".join(lines)
 
 
-def send_notification(bonds, analyses=None):
-    """通过 Server酱 推送到微信。
+def send_notification(bonds, analyses=None, sendkeys=None):
+    """通过 Server酱 推送到微信，支持多个接收人。
 
     Args:
         bonds: 今日新债列表
         analyses: 与 bonds 等长的分析结果列表（元素为 dict 或 None）
+        sendkeys: SendKey 列表；SENDKEY 环境变量会自动并入（去重）
 
     Returns:
-        bool: 推送是否成功
+        bool: 至少一个推送成功即为 True
     """
-    sendkey = os.getenv("SENDKEY")
-    if not sendkey:
-        print("[ERROR] 未设置 SENDKEY 环境变量，无法推送")
+    # 过滤掉配置里写坏的值，并复制一份，避免污染调用方传入的列表
+    keys = [k for k in (sendkeys or []) if isinstance(k, str) and k.strip()]
+    env_key = os.getenv("SENDKEY")
+    if env_key and env_key not in keys:
+        keys.append(env_key)
+
+    if not keys:
+        print("[ERROR] 未配置任何 SendKey（config.yaml 的 notifications.sendkeys "
+              "或 SENDKEY 环境变量），无法推送")
         return False
 
     title, desp = build_message(bonds, analyses)
-    url = f"https://sctapi.ftqq.com/{sendkey}.send"
     payload = {"title": title, "desp": desp}
-    try:
-        resp = requests.post(url, data=payload, timeout=30)
-        resp.raise_for_status()
-        result = resp.json()
-        if result.get("code") == 0:
-            print(f"[INFO] 推送成功: {payload['title']}")
-            return True
-        print(f"[ERROR] 推送失败: {result}")
-        return False
-    except requests.exceptions.RequestException as e:
-        print(f"[ERROR] 推送异常: {e}")
-        return False
+
+    success_count = 0
+    for sendkey in keys:
+        url = f"https://sctapi.ftqq.com/{sendkey}.send"
+        try:
+            resp = requests.post(url, data=payload, timeout=30)
+            resp.raise_for_status()
+            result = resp.json()
+            if result.get("code") == 0:
+                print(f"[INFO] 推送成功 (SendKey: {sendkey[:12]}...): {title}")
+                success_count += 1
+            else:
+                print(f"[ERROR] 推送失败 (SendKey: {sendkey[:12]}...): {result}")
+        except requests.exceptions.RequestException as e:
+            print(f"[ERROR] 推送异常 (SendKey: {sendkey[:12]}...): {e}")
+
+    if success_count:
+        print(f"[INFO] 推送完成: {success_count}/{len(keys)} 成功")
+        return True
+    print(f"[ERROR] 全部推送失败: 0/{len(keys)}")
+    return False
 
 
 def main():
@@ -200,7 +224,9 @@ def main():
             print("[WARN] AI 分析失败，降级为基础推送")
             analyses = None
 
-    ok = send_notification(bonds, analyses)
+    notifications = config.get("notifications")
+    sendkeys = notifications.get("sendkeys") if isinstance(notifications, dict) else None
+    ok = send_notification(bonds, analyses, sendkeys)
     return 0 if ok else 1
 
 

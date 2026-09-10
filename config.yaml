@@ -2,6 +2,13 @@
 # 打新债提醒 - 用户配置文件
 # ===========================================
 
+# 微信推送通知设置
+notifications:
+  sendkeys:
+    - "SCT387450TPQJ0X0EqmHSXSCItqwEFdKyy"
+    # 如需添加更多接收人，在上面的 SendKey 列表中添加
+    # SENDKEY 环境变量会自动合并（无需单独添加到此处）
+
 # AI 分析设置
 analysis:
   enabled: true              # false = 关闭 AI，纯推送新债名称

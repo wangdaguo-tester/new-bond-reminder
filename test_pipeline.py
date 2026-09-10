@@ -411,6 +411,93 @@ def test_load_config_merges_user_overrides():
     assert cfg["analysis"]["enabled"] is False
 
 
+def test_load_config_notifications():
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "config.yaml")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write('analysis:\n  enabled: true\nnotifications:\n  sendkeys:\n    - "K1"\n')
+        cfg = m.load_config(path)
+    assert cfg["notifications"]["sendkeys"] == ["K1"]
+
+
+def test_load_config_bad_notifications_type():
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "config.yaml")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write('notifications: "写错了"\n')
+        cfg = m.load_config(path)
+    assert cfg["notifications"] == {"sendkeys": []}
+
+
+# --------------------------------------------------------------------------
+# send_notification：多接收人
+# --------------------------------------------------------------------------
+
+def _patch_post(status_record):
+    """替换 requests.post，记录每次请求的 URL。"""
+    original = m.requests.post
+
+    def fake_post(url, **kwargs):
+        status_record.append(url)
+        return _FakeResp({"code": 0})
+
+    m.requests.post = fake_post
+    return lambda: setattr(m.requests, "post", original)
+
+
+def _without_env_sendkey():
+    """临时清掉 SENDKEY 环境变量，返回还原函数。"""
+    original = os.environ.pop("SENDKEY", None)
+    return lambda: os.environ.__setitem__("SENDKEY", original) if original else None
+
+
+def test_send_notification_pushes_to_every_key():
+    posted = []
+    restore_post = _patch_post(posted)
+    restore_env = _without_env_sendkey()
+    try:
+        ok = m.send_notification([_bond("A转债", "甲公司")], None, ["KEY1", "KEY2"])
+    finally:
+        restore_post()
+        restore_env()
+
+    assert ok is True
+    assert len(posted) == 2
+    assert "KEY1" in posted[0] and "KEY2" in posted[1]
+
+
+def test_send_notification_merges_env_key_without_mutating_input():
+    """SENDKEY 环境变量自动并入，但不能污染调用方传入的列表。"""
+    posted = []
+    restore_post = _patch_post(posted)
+    original_env = os.environ.get("SENDKEY")
+    os.environ["SENDKEY"] = "ENVKEY"
+    try:
+        sendkeys = ["CFGKEY"]
+        ok = m.send_notification([_bond("A转债", "甲公司")], None, sendkeys)
+    finally:
+        restore_post()
+        if original_env is None:
+            os.environ.pop("SENDKEY", None)
+        else:
+            os.environ["SENDKEY"] = original_env
+
+    assert ok is True
+    assert len(posted) == 2
+    assert sendkeys == ["CFGKEY"], "不应把环境变量写回调用方的列表"
+
+
+def test_send_notification_no_keys_returns_false():
+    restore_env = _without_env_sendkey()
+    try:
+        assert m.send_notification([_bond("A转债")], None, []) is False
+        assert m.send_notification([_bond("A转债")], None, None) is False
+        # 配置里混入非法值时应被过滤，而不是在拼接 URL 时崩溃
+        assert m.send_notification([_bond("A转债")], None, [None, "", 42]) is False
+    finally:
+        restore_env()
+
+
 # --------------------------------------------------------------------------
 # build_message：任何一只债都不能从推送里消失
 # --------------------------------------------------------------------------

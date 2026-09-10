@@ -1,0 +1,10 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# 编辑器 / 工具
+.idea/
+.continue/
+
+# 一次性调试脚本，保留在本地但不进仓库
+deepseek.py

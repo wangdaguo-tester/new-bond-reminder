@@ -15,10 +15,11 @@
 
 ```yaml
 notifications:
-  sendkeys:
-    - "SCT387450TPQJ0X0EqmHSXSCItqwEFdKyy"
-    - "<已有的旧 SendKey>"
+  sendkeys: []          # 留空，密钥走 SENDKEY 环境变量，避免写进版本库
 ```
+
+> 注：本文档最初示例中直接写了明文 SendKey，已移除——该 key 泄露在
+> 版本库中，需在 Server酱后台吊销后重新生成。
 
 ### main.py
 

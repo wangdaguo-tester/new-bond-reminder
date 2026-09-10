@@ -4,8 +4,10 @@
 可以直接 `python test_pipeline.py` 跑，也兼容 pytest。
 """
 
+import io
 import json
 import os
+import re
 import sys
 import tempfile
 import traceback
@@ -496,6 +498,71 @@ def test_send_notification_no_keys_returns_false():
         assert m.send_notification([_bond("A转债")], None, [None, "", 42]) is False
     finally:
         restore_env()
+
+
+def _with_env_sendkey(value):
+    original = os.environ.get("SENDKEY")
+    os.environ["SENDKEY"] = value
+    return lambda: (os.environ.pop("SENDKEY", None) if original is None
+                    else os.environ.__setitem__("SENDKEY", original))
+
+
+def test_send_notification_reads_multiple_env_keys():
+    """SENDKEY 支持逗号/分号/换行分隔多个 key，多接收人不必写进版本库。"""
+    posted = []
+    restore_post = _patch_post(posted)
+    restore_env = _with_env_sendkey("ENV1, ENV2;ENV3\nENV4")
+    try:
+        ok = m.send_notification([_bond("A转债")], None, None)
+    finally:
+        restore_post()
+        restore_env()
+
+    assert ok is True
+    assert len(posted) == 4
+    for key in ("ENV1", "ENV2", "ENV3", "ENV4"):
+        assert any(key in u for u in posted), f"{key} 未被推送"
+
+
+def test_send_notification_dedupes_same_key():
+    """config 与环境变量里的同一个 key 不应重复推送。"""
+    posted = []
+    restore_post = _patch_post(posted)
+    restore_env = _with_env_sendkey("SAME")
+    try:
+        m.send_notification([_bond("A转债")], None, ["SAME"])
+    finally:
+        restore_post()
+        restore_env()
+
+    assert len(posted) == 1
+
+
+# --------------------------------------------------------------------------
+# 防泄漏：明文密钥不得进版本库
+# --------------------------------------------------------------------------
+
+_SENDKEY_RE = re.compile(r"SCT[0-9A-Za-z]{15,}")
+_SKIP_DIRS = {".git", "__pycache__", ".idea", ".continue"}
+
+
+def test_no_plaintext_sendkey_in_repo():
+    """config.yaml 和文档里写明文 SendKey 等于公开泄露，这里做兜底检查。"""
+    root = os.path.dirname(os.path.abspath(__file__))
+    offenders = []
+
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
+        for name in filenames:
+            path = os.path.join(dirpath, name)
+            try:
+                text = io.open(path, encoding="utf-8", errors="ignore").read()
+            except OSError:
+                continue
+            if _SENDKEY_RE.search(text):
+                offenders.append(os.path.relpath(path, root))
+
+    assert not offenders, f"发现明文 SendKey，请改走 SENDKEY 环境变量: {offenders}"
 
 
 # --------------------------------------------------------------------------

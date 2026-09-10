@@ -1,5 +1,6 @@
 import copy
 import os
+import re
 import sys
 import requests
 import yaml
@@ -159,16 +160,22 @@ def send_notification(bonds, analyses=None, sendkeys=None):
     Args:
         bonds: 今日新债列表
         analyses: 与 bonds 等长的分析结果列表（元素为 dict 或 None）
-        sendkeys: SendKey 列表；SENDKEY 环境变量会自动并入（去重）
+        sendkeys: SendKey 列表（一般留空，走环境变量更安全）
 
     Returns:
         bool: 至少一个推送成功即为 True
+
+    密钥来源：config.yaml 的 notifications.sendkeys，以及 SENDKEY 环境变量。
+    环境变量支持用逗号/分号/换行分隔多个 key，这样多接收人也能走 Secrets，
+    不必把密钥写进版本库。两边会自动去重。
     """
     # 过滤掉配置里写坏的值，并复制一份，避免污染调用方传入的列表
     keys = [k for k in (sendkeys or []) if isinstance(k, str) and k.strip()]
-    env_key = os.getenv("SENDKEY")
-    if env_key and env_key not in keys:
-        keys.append(env_key)
+
+    for key in re.split(r"[,;\n]+", os.getenv("SENDKEY") or ""):
+        key = key.strip()
+        if key and key not in keys:
+            keys.append(key)
 
     if not keys:
         print("[ERROR] 未配置任何 SendKey（config.yaml 的 notifications.sendkeys "

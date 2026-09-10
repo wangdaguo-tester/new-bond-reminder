@@ -27,6 +27,9 @@ jobs:
       - name: 安装依赖
         run: pip install -r requirements.txt
 
+      - name: 运行回归测试
+        run: python test_pipeline.py
+
       - name: 检查新债并推送
         env:
           SENDKEY: ${{ secrets.SENDKEY }}

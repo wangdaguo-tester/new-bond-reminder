@@ -3,16 +3,11 @@
 # ===========================================
 
 # 微信推送通知设置
-#
-# ⚠️ 不要在这里写明文 SendKey —— config.yaml 会进版本库，等于公开泄露，
-#    任何人都能用它往你的微信推消息。
-#
-# 推荐做法：把 SendKey 放到环境变量 SENDKEY（GitHub Actions 中配置为 Secrets）。
-#   - 单个接收人：SENDKEY=SCTxxxxxxxx
-#   - 多个接收人：SENDKEY=SCTxxxxxxxx,SCYyyyyyyyy   （逗号/分号/换行分隔均可）
-# 环境变量里的 key 会自动与下面的列表合并、去重。
 notifications:
-  sendkeys: []
+  sendkeys:
+    - "SCT387450TPQJ0X0EqmHSXSCItqwEFdKyy"
+    # 如需添加更多接收人，在上面的 SendKey 列表中添加
+    # SENDKEY 环境变量会自动合并（无需单独添加到此处）
 
 # AI 分析设置
 analysis:

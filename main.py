@@ -51,6 +51,11 @@ def load_config(config_path="config.yaml"):
         for section in ("analysis", "notifications"):
             _merge_section(config, section)
 
+        sendkeys = config["notifications"].get("sendkeys")
+        if not isinstance(sendkeys, list):
+            print("[WARN] config.yaml 中 notifications.sendkeys 应为列表，已回退为空列表")
+            config["notifications"]["sendkeys"] = []
+
         return config
     except (yaml.YAMLError, ValueError, OSError) as e:
         print(f"[WARN] config.yaml 解析失败: {e}，使用默认空配置")
@@ -94,7 +99,7 @@ def fetch_new_bonds():
 
     # 把抓取结果的形态写进日志，便于事后判断是「真没有」还是「抓瞎了」
     if not rows:
-        print("[WARN] 集思录返回 0 条记录。若连续多日如此，很可能是接口被拦截，请检查。")
+        return [], "集思录返回 0 条记录，无法确认是否被反爬拦截，停止以避免静默漏报"
     elif not today_bonds:
         apply_dates = sorted({
             cell.get("apply_date")
@@ -193,10 +198,10 @@ def send_notification(bonds, analyses=None, sendkeys=None):
         except requests.exceptions.RequestException as e:
             print(f"[ERROR] 推送异常 (SendKey: {sendkey[:12]}...): {e}")
 
-    if success_count:
+    if success_count == len(keys):
         print(f"[INFO] 推送完成: {success_count}/{len(keys)} 成功")
         return True
-    print(f"[ERROR] 全部推送失败: 0/{len(keys)}")
+    print(f"[ERROR] 推送未全部成功: {success_count}/{len(keys)} 成功")
     return False
 
 

@@ -343,13 +343,13 @@ def test_fetch_rejects_non_dict_payload():
         restore()
 
 
-def test_fetch_empty_rows_is_success_not_error():
-    """空结果是合法响应（今天可能真没新债），不能当成失败。"""
+def test_fetch_empty_rows_is_error_to_avoid_silent_missed_alerts():
+    """预告列表为空时无法排除反爬，必须失败以避免静默漏报。"""
     restore = _patch_get({"rows": []})
     try:
         bonds, err = m.fetch_new_bonds()
         assert bonds == []
-        assert err is None
+        assert err is not None
     finally:
         restore()
 
@@ -429,6 +429,15 @@ def test_load_config_bad_notifications_type():
     assert cfg["notifications"] == {"sendkeys": []}
 
 
+def test_load_config_bad_sendkeys_type_falls_back_to_empty_list():
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "config.yaml")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write('notifications:\n  sendkeys: "not-a-list"\n')
+        cfg = m.load_config(path)
+    assert cfg["notifications"]["sendkeys"] == []
+
+
 # --------------------------------------------------------------------------
 # send_notification：多接收人
 # --------------------------------------------------------------------------
@@ -496,6 +505,25 @@ def test_send_notification_no_keys_returns_false():
         assert m.send_notification([_bond("A转债")], None, [None, "", 42]) is False
     finally:
         restore_env()
+
+
+def test_send_notification_fails_when_any_recipient_fails():
+    original_post = m.requests.post
+    restore_env = _without_env_sendkey()
+
+    def fake_post(url, **kwargs):
+        if "BADKEY" in url:
+            raise m.requests.RequestException("simulated failure")
+        return _FakeResp({"code": 0})
+
+    m.requests.post = fake_post
+    try:
+        ok = m.send_notification([_bond("A")], None, ["GOODKEY", "BADKEY"])
+    finally:
+        m.requests.post = original_post
+        restore_env()
+
+    assert ok is False
 
 
 # --------------------------------------------------------------------------

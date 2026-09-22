@@ -27,8 +27,11 @@ jobs:
         with:
           python-version: "3.12"
 
+      # 只装告警链真正用到的两个包(requests 推送 + pyyaml 读配置)。
+      # 若照搬 requirements.txt,openai 一旦装不上,告警链就会和主链一样哑掉 ——
+      # 告警链不该因为 AI 依赖装不上而发不出告警。
       - name: 安装依赖
-        run: pip install -r requirements.txt
+        run: pip install "requests>=2.28.0" "pyyaml>=6.0"
 
       # 这里刻意不跑回归测试:告警链自己不能因为测试挂掉而发不出告警。
       - name: 检查主链并告警

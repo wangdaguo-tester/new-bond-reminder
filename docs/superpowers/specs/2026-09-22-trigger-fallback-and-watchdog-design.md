@@ -71,6 +71,8 @@ GitHub 官方文档明确说明:
 
 告警与兜底都刻意避开整点(官方建议),且**告警早于兜底**,这样链路失效当天用户先收到告警,再收到补推,因果关系清楚。
 
+**表里的时间是 cron 配置目标,不是送达承诺。** 避开整点是官方文档建议的**缓解**手段,不是保证:官方只说这样能"降低被延迟的概率",`schedule` 事件在负载高时仍可能晚到几分钟到数小时。而且 09:11 / 09:23 这两个分钟点在本仓库**没有任何实测数据**——历史上所有定时运行都来自旧的整点配置(`0 1`,实测延迟到 13:29~13:56,最晚 20:32)。因此"早上准时收到提醒"取决于 Cloudflare 主链被修好(PAT + `wrangler deploy`),不能指望 GitHub 兜底链准点。
+
 ## 变更范围
 
 ### wrangler.toml
@@ -82,26 +84,35 @@ crons = ["57 0 * * *"]
 
 ### trigger_status.py(新增)
 
-单一职责:判断"今天主链是否已成功",不做任何推送。
+单一职责:判断"今天主链跑得怎么样",不做任何推送。
 
 ```python
 PRIMARY_OK = "ok"           # 今天有成功记录,或主链正在运行
-PRIMARY_MISSING = "missing" # 今天没有成功记录(没有 / 失败)
+PRIMARY_MISSING = "missing" # 今天压根没有运行记录(链没触发)
+PRIMARY_FAILED = "failed"   # 今天有运行记录,但全部失败(链跑了,中途出错)
 PRIMARY_UNKNOWN = "unknown" # 查询本身失败,无法判断
 
-def check_primary_today(now=None, repo=None, token=None, timeout=30) -> str
+PrimaryVerdict = namedtuple("PrimaryVerdict", ["status", "run_url"])
+
+def evaluate_primary_today(now=None, repo=None, token=None, timeout=30) -> PrimaryVerdict
+def check_primary_today(now=None, repo=None, token=None, timeout=30) -> str   # 兼容入口
 ```
+
+`evaluate_primary_today` 是真实实现(一次 HTTP 调用),`check_primary_today` 是薄包装,只返回 `.status` —— CLI 门禁和既有测试依赖这个字符串契约;需要拿到失败运行的链接时用前者。`run_url` 取今天最近一次运行的 `html_url`(API 按时间倒序返回),今天没有运行或该字段缺失时为 `None`。
 
 逻辑:
 
 1. 确定"今天" —— 按北京时间(UTC+8)。跨日边界是 UTC 16:00 = 北京次日 00:00,不能直接用 UTC 日期。
 2. `GET https://api.github.com/repos/{repo}/actions/runs?event=repository_dispatch&per_page=30`
 3. 把每个 run 的 `created_at`(UTC)换算成北京时间,筛出日期等于今天的
-4. 有任意一个 `conclusion == "success"`,或 `status != "completed"`(还在跑)→ `PRIMARY_OK`
-5. 否则(没有今天的记录,或有但全部失败)→ `PRIMARY_MISSING`
-6. 请求异常 / JSON 解析失败 / 拿不到 repo 信息 → `PRIMARY_UNKNOWN`
+4. 今天没有任何运行记录 → `PRIMARY_MISSING`
+5. 有任意一个 `conclusion == "success"`,或 `status != "completed"`(还在跑)→ `PRIMARY_OK`
+6. 否则(有今天的记录,且全部 completed 但都不成功)→ `PRIMARY_FAILED`
+7. 请求异常 / JSON 解析失败 / 拿不到 repo 信息 → `PRIMARY_UNKNOWN`
 
-**为什么是三态而不是布尔**:两个消费方对"查不到"的诉求相反 —— 兜底推送宁可重复不可漏报(查不到就照推),而告警不能把"查不到"说成"主链挂了"(那是撒谎)。三态让各自都能诚实处理。
+**为什么是四态而不是布尔**:两个消费方对"查不到"的诉求相反 —— 兜底推送宁可重复不可漏报(非 OK 就照推),而告警不能把"查不到"说成"主链挂了"(那是撒谎)。同样地,告警也不能把"链跑了但失败"说成"链没触发":前者的排查方向是**打开运行日志看卡在哪一步**,后者才是**查 PAT / Worker / cron**。混为一谈就是误诊 —— 而这正是"三态"版本的真实缺陷(`main.py` 在抓取失败或推送失败时返回 1,当天会被报成"没触发")。
+
+`PRIMARY_FAILED` 与 `PRIMARY_MISSING` 一样让 CLI 退出码非 0,所以兜底链照推 —— 这是有意的(宁可重复一条,不可漏掉一条),两者的区别只体现在告警文案上。
 
 **为什么"还在跑"也算 OK**:避免主链 run 正在执行的窗口内兜底重复推送。
 
@@ -111,9 +122,15 @@ CLI:`python trigger_status.py`,退出码 0 = `PRIMARY_OK`,非 0 = 其他(供 wor
 
 ### watchdog.py(新增)
 
-入口脚本,约 30 行:`check_primary_today()` → 若为 `PRIMARY_MISSING` 或 `PRIMARY_UNKNOWN`,调 `main.send_alert()` 推一条告警。
+入口脚本:`evaluate_primary_today()` → 若为 `PRIMARY_MISSING` / `PRIMARY_FAILED` / `PRIMARY_UNKNOWN`,调 `main.send_alert()` 推一条告警,三种异常各有独立文案。
 
-告警文案**不依赖集思录数据**,所以即使抓取接口也挂了,告警仍能发出。内容包含状态原因和排查方向(PAT 是否过期 / Worker 是否还在 / cron 是否正确)。
+告警文案**不依赖集思录数据**,所以即使抓取接口也挂了,告警仍能发出。内容包含状态原因和排查方向:
+
+- `MISSING` — 链压根没触发:查 PAT 是否过期 / Worker 是否还在 / cron 是否正确
+- `FAILED` — 链跑了但失败:明确写出"这不是没触发",列出集思录抓取失败 / 推送失败 / AI 分析异常三种常见原因,并把失败那次的运行链接附在正文末尾(取 `PrimaryVerdict.run_url`)
+- `UNKNOWN` — 查不到:说明是"无法确认",不冒充"主链挂了"
+
+`watchdog.py` 只依赖 `requests` + `yaml`,不碰 AI 依赖栈 —— `main.py` 对 `analysis`(会拉起 `openai`)采用函数内延迟导入,否则 `openai` 一旦装不上,主链、兜底和告警会一起哑掉(正是本项目要消灭的复合静默失效)。
 
 ### main.py
 
@@ -148,6 +165,8 @@ CLI:`python trigger_status.py`,退出码 0 = `PRIMARY_OK`,非 0 = 其他(供 wor
 
 **必须避开的坑**:该 workflow 同时订阅 `repository_dispatch`。若门禁不判断事件类型,主链那次运行会查到"今天已有一个 dispatch 运行"——也就是它自己——从而判定 `ok` 并**跳过自己要发的提醒**。`if: github.event_name == 'schedule'` 就是防这个:非 schedule 事件下该步骤被跳过,输出为空,推送照常执行。手动 `workflow_dispatch` 因此也总是推送,便于测试。
 
+3. 回归测试步骤挪到**推送之后**(job 的最后一步)。GitHub Actions 里任何一步失败都会跳过它后面的所有步骤,测试若排在前面,一次测试失败就会把当天的最后一道提醒整个吞掉 —— 那正是本链条要消灭的静默漏报。放到最后,提醒已经发出,测试失败只会让本次运行标红(便于在 Actions 页面发现),不会再挡住提醒。(`watchdog.yml` 同理,它干脆不跑测试。)
+
 ### .github/workflows/watchdog.yml(新增)
 
 只由自己的 cron(`11 1 * * 1-5`,即 09:11 北京)和 `workflow_dispatch` 触发,**不订阅 `repository_dispatch`** —— 它的运行不会污染 `event=repository_dispatch` 的状态查询,也不会在主链正常时产生噪音。
@@ -165,27 +184,35 @@ CLI:`python trigger_status.py`,退出码 0 = `PRIMARY_OK`,非 0 = 其他(供 wor
 |---|---|---|---|
 | 主链成功推送 | OK | 跳过 | 不发 |
 | 主链成功但今日无新债 | OK | 跳过 | 不发 |
-| 主链 run 推送失败(`main.py` 返回 1 → conclusion=failure) | MISSING | 补推 | 发 |
-| 主链完全没触发 | MISSING | 补推 | 发 |
 | 主链 run 正在执行中 | OK | 跳过 | 不发 |
+| 主链 run 推送失败(`main.py` 返回 1 → conclusion=failure) | FAILED | 补推 | 发(说明是"跑了但失败",附运行链接) |
+| 主链 run 被取消 / 结论非 success 的其他情形 | FAILED | 补推 | 发(同上) |
+| 主链完全没触发 | MISSING | 补推 | 发(排查 PAT / Worker / cron) |
 | GitHub API 查询失败/限流 | UNKNOWN | 补推(宁可重复) | 发(说明是"无法确认") |
 
-主链推送失败能被识别,是因为失败路径上 `main.py` 返回 1 → step 失败 → run `conclusion = failure`;而"今日无新债"返回 0,是健康状态,不会误判。
+主链推送失败能被识别,是因为失败路径上 `main.py` 返回 1 → step 失败 → run `conclusion = failure`;而"今日无新债"返回 0,是健康状态,不会误判。"fail 了"与"没触发"分开,是因为两者的排查方向完全不同:前者要打开运行日志,后者才要查 PAT 和 Worker。
+
+### 已接受的残留风险
+
+**检查时刻仍在执行的 run 被判定为 OK。** 这是为了不抢跑重复推送(见上表),代价是:若某次 run 卡住很久、最终以失败结束,而检查(09:11 告警 / 09:23 兜底)恰好发生在它执行期间,那么这一天既不会补推也不会告警,只能等到用户自己发现。窗口很窄 —— 主链实测运行时长 14~37 秒,而检查点在 8:57 之后的 14 / 26 分钟。不为此引入持久化状态(见"不涉及")。
 
 ## 测试
 
 `test_pipeline.py` 新增(沿用现有纯函数 + 假响应风格,不依赖网络):
 
 1. 今天有 success run → OK
-2. 今天只有 failed run → MISSING
-3. 今天只有昨天的 run(含北京跨日边界:UTC 15:59 vs 16:00)→ MISSING
-4. run 处于 in_progress → OK
-5. 请求异常 → UNKNOWN
-6. 拿不到 repo 信息 → UNKNOWN
-7. `watchdog.main()`:OK 时不推送 / MISSING 时推送 / UNKNOWN 时推送
-8. `_resolve_sendkeys` 的环境变量并入、去重、不修改入参
+2. 今天只有 failed run → FAILED(跑了但失败,不能再报成 MISSING)
+3. 今天既有失败也有成功(例如失败后重跑过)→ OK
+4. 今天只有昨天的 run(含北京跨日边界:UTC 15:59 vs 16:00)→ MISSING
+5. run 处于 in_progress → OK
+6. 请求异常 → UNKNOWN;拿不到 repo 信息 → UNKNOWN
+7. `evaluate_primary_today` 返回今天最近一次运行的 `html_url`;今天没有运行时 `run_url` 为 None;字段缺失时也是 None
+8. `watchdog.run()`:OK 时不推送 / MISSING、FAILED、UNKNOWN 时各推一条、三条文案互不相同
+9. FAILED 告警正文包含运行链接;拿不到链接时不出现"运行记录:None"这类半截提示
+10. `_resolve_sendkeys` 的环境变量并入、去重、不修改入参
+11. `import main` 不会连带 import `analysis`(告警链不依赖 AI 依赖栈)
 
-现有 43 个测试必须全部通过。
+既有测试必须全部通过。唯一必须改动的既有用例是 `test_check_primary_missing_when_today_run_failed` —— 它断言的正是被本次修复推翻的行为(失败 → MISSING),已更名为 `test_check_primary_failed_when_today_run_failed` 并断言 FAILED。
 
 本地执行注意:Windows 控制台默认 GBK,现有 3 个推送测试在打印含 🏦 的标题时会抛 `UnicodeEncodeError` 而本地假失败(CI 的 Ubuntu 是 UTF-8,不受影响)。本次在 `test_pipeline.py` 的 `__main__` 块加一次 `sys.stdout.reconfigure(encoding="utf-8", errors="replace")`,让本地 `python test_pipeline.py` 能拿到真实信号。
 

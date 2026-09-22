@@ -158,31 +158,26 @@ def build_message(bonds, analyses=None):
     return title, "\n".join(lines)
 
 
-def send_notification(bonds, analyses=None, sendkeys=None):
-    """通过 Server酱 推送到微信，支持多个接收人。
+def _resolve_sendkeys(sendkeys=None):
+    """汇总可用的 SendKey:传入列表(过滤坏值) + SENDKEY 环境变量(去重)。
 
-    Args:
-        bonds: 今日新债列表
-        analyses: 与 bonds 等长的分析结果列表（元素为 dict 或 None）
-        sendkeys: SendKey 列表；SENDKEY 环境变量会自动并入（去重）
-
-    Returns:
-        bool: 至少一个推送成功即为 True
+    返回新列表,不修改调用方传入的列表。
     """
-    # 过滤掉配置里写坏的值，并复制一份，避免污染调用方传入的列表
     keys = [k for k in (sendkeys or []) if isinstance(k, str) and k.strip()]
     env_key = os.getenv("SENDKEY")
     if env_key and env_key not in keys:
         keys.append(env_key)
+    return keys
 
+
+def _push_serverchan(keys, title, desp):
+    """向每个 SendKey 推送同一条消息,全部成功才返回 True。"""
     if not keys:
-        print("[ERROR] 未配置任何 SendKey（config.yaml 的 notifications.sendkeys "
-              "或 SENDKEY 环境变量），无法推送")
+        print("[ERROR] 未配置任何 SendKey(config.yaml 的 notifications.sendkeys "
+              "或 SENDKEY 环境变量),无法推送")
         return False
 
-    title, desp = build_message(bonds, analyses)
     payload = {"title": title, "desp": desp}
-
     success_count = 0
     for sendkey in keys:
         url = f"https://sctapi.ftqq.com/{sendkey}.send"
@@ -203,6 +198,35 @@ def send_notification(bonds, analyses=None, sendkeys=None):
         return True
     print(f"[ERROR] 推送未全部成功: {success_count}/{len(keys)} 成功")
     return False
+
+
+def send_notification(bonds, analyses=None, sendkeys=None):
+    """通过 Server酱 推送到微信,支持多个接收人。
+
+    Args:
+        bonds: 今日新债列表
+        analyses: 与 bonds 等长的分析结果列表(元素为 dict 或 None)
+        sendkeys: SendKey 列表;SENDKEY 环境变量会自动并入(去重)
+
+    Returns:
+        bool: 全部接收人推送成功才为 True
+    """
+    title, desp = build_message(bonds, analyses)
+    return _push_serverchan(_resolve_sendkeys(sendkeys), title, desp)
+
+
+def send_alert(title, desp, sendkeys=None):
+    """推送一条自定义告警文案(不依赖新债数据)。
+
+    Args:
+        title: 告警标题
+        desp: 告警正文
+        sendkeys: SendKey 列表;SENDKEY 环境变量会自动并入(去重)
+
+    Returns:
+        bool: 全部接收人推送成功才为 True
+    """
+    return _push_serverchan(_resolve_sendkeys(sendkeys), title, desp)
 
 
 def main():

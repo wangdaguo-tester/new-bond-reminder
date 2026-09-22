@@ -454,10 +454,26 @@ def _patch_post(status_record):
     return lambda: setattr(m.requests, "post", original)
 
 
+def _with_env_sendkey(value):
+    """临时把 SENDKEY 设为 value(None 表示删除),返回还原函数。"""
+    original = os.environ.get("SENDKEY")
+    if value is None:
+        os.environ.pop("SENDKEY", None)
+    else:
+        os.environ["SENDKEY"] = value
+
+    def restore():
+        if original is None:
+            os.environ.pop("SENDKEY", None)
+        else:
+            os.environ["SENDKEY"] = original
+
+    return restore
+
+
 def _without_env_sendkey():
-    """临时清掉 SENDKEY 环境变量，返回还原函数。"""
-    original = os.environ.pop("SENDKEY", None)
-    return lambda: os.environ.__setitem__("SENDKEY", original) if original else None
+    """临时清掉 SENDKEY 环境变量,返回还原函数。"""
+    return _with_env_sendkey(None)
 
 
 def test_send_notification_pushes_to_every_key():
@@ -527,6 +543,65 @@ def test_send_notification_fails_when_any_recipient_fails():
 
 
 # --------------------------------------------------------------------------
+# 推送原语:_resolve_sendkeys / send_alert
+# --------------------------------------------------------------------------
+
+def test_resolve_sendkeys_filters_bad_values_and_merges_env():
+    restore_env = _with_env_sendkey("ENVKEY")
+    try:
+        keys = m._resolve_sendkeys(["KEY1", "  ", None, 42, "KEY2"])
+    finally:
+        restore_env()
+
+    assert keys == ["KEY1", "KEY2", "ENVKEY"]
+
+
+def test_resolve_sendkeys_deduplicates_env_key():
+    restore_env = _with_env_sendkey("KEY1")
+    try:
+        keys = m._resolve_sendkeys(["KEY1"])
+    finally:
+        restore_env()
+
+    assert keys == ["KEY1"]
+
+
+def test_resolve_sendkeys_does_not_mutate_input():
+    restore_env = _with_env_sendkey("ENVKEY")
+    try:
+        sendkeys = ["KEY1"]
+        m._resolve_sendkeys(sendkeys)
+    finally:
+        restore_env()
+
+    assert sendkeys == ["KEY1"], "不应把环境变量写回调用方的列表"
+
+
+def test_send_alert_pushes_to_every_key():
+    posted = []
+    restore_post = _patch_post(posted)
+    restore_env = _with_env_sendkey(None)
+    try:
+        ok = m.send_alert("标题", "正文", ["KEY1", "KEY2"])
+    finally:
+        restore_post()
+        restore_env()
+
+    assert ok is True
+    assert len(posted) == 2
+    assert posted[0].endswith("/KEY1.send") and posted[1].endswith("/KEY2.send")
+
+
+def test_send_alert_without_any_key_returns_false():
+    restore_env = _with_env_sendkey(None)
+    try:
+        assert m.send_alert("标题", "正文", None) is False
+        assert m.send_alert("标题", "正文", [None, "", 42]) is False
+    finally:
+        restore_env()
+
+
+# --------------------------------------------------------------------------
 # build_message：任何一只债都不能从推送里消失
 # --------------------------------------------------------------------------
 
@@ -562,6 +637,11 @@ def test_build_message_all_none_analyses_falls_back():
 # --------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    # Windows 控制台默认 GBK,打印含 emoji 的推送标题会抛 UnicodeEncodeError,
+    # 造成 3 个推送测试在本地假失败(CI 的 Ubuntu 是 UTF-8,本来就没问题)。
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
     tests = [(n, f) for n, f in sorted(globals().items())
              if n.startswith("test_") and callable(f)]
     passed = failed = 0

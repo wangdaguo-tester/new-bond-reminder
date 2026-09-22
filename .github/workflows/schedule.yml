@@ -2,8 +2,11 @@ name: 打新债提醒
 
 on:
   schedule:
-    # UTC 1:00 = 北京时间 9:00, 周一到周五（作为兜底，GitHub 调度可能延迟）
-    - cron: "0 1 * * 1-5"
+    # UTC 1:23 = 北京时间 9:23,周一到周五(主链 8:57 之后的兜底)。
+    # GitHub 的 cron 是标准语义,1 = 周一;Cloudflare 是 1 = 周日,两者相反。
+    # 刻意避开整点:官方文档说明整点是负载高峰,schedule 会被大幅延迟
+    # (原配置 "0 1" 实测被延迟到 13:29~13:56,最晚到过 20:32)。
+    - cron: "23 1 * * 1-5"
   workflow_dispatch:
   repository_dispatch:
     types:
@@ -11,6 +14,10 @@ on:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+permissions:
+  contents: read    # actions/checkout 需要
+  actions: read     # trigger_status 读本仓库的运行记录需要
 
 jobs:
   check-and-notify:
@@ -35,7 +42,24 @@ jobs:
       - name: 运行回归测试
         run: python test_pipeline.py
 
+      - name: 判断主链是否已成功
+        id: primary
+        # 只对 schedule 事件去重。repository_dispatch 就是主链本身:
+        # 若在这里查"今天有没有 dispatch 运行",会查到本次运行并判定 ok,
+        # 从而把自己要发的提醒跳过 —— 必须靠事件判断挡住。
+        if: github.event_name == 'schedule'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if python trigger_status.py; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: 检查新债并推送
+        # 非 schedule 事件该步骤被跳过、输出为空,因此照常推送
+        if: steps.primary.outputs.ok != 'true'
         env:
           SENDKEY: ${{ secrets.SENDKEY }}
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}

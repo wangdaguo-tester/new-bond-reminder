@@ -3,4 +3,7 @@ main = "trigger.js"
 compatibility_date = "2026-07-17"
 
 [triggers]
-crons = ["57 0 * * 1-5"]
+# 注意:Cloudflare 的星期字段是 1 = 周日(和 GitHub Actions 相反,那边 1 = 周一)。
+# 原来的 "57 0 * * 1-5" 实际是周日~周四,周五从来没触发过。
+# 这里改用每天触发绕开歧义:周末没有新债时 main.py 不会推送。
+crons = ["57 0 * * *"]

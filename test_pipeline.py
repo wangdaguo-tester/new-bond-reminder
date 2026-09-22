@@ -991,12 +991,17 @@ def test_watchdog_fails_when_alert_could_not_be_sent():
 # 告警链的依赖边界:告警不能跟着 AI 依赖一起死
 # --------------------------------------------------------------------------
 
-def test_importing_main_does_not_pull_in_analysis():
-    """告警链只依赖 main/trigger_status:openai 装不上也必须能发出告警。"""
+def test_alert_entry_point_carries_no_ai_dependency():
+    """告警入口(watchdog)只依赖 requests + pyyaml:openai 装不上也必须能发出告警。
+
+    探测的是 watchdog 而不是 main —— 否则将来谁在 watchdog.py 里加一行
+    import analysis / import openai,这个门禁照样放行。
+    """
     proc = subprocess.run([sys.executable, "-c",
-                           "import main, sys; sys.exit(1 if 'analysis' in sys.modules else 0)"],
+                           "import sys, watchdog; "
+                           "sys.exit(1 if ({'analysis', 'openai'} & set(sys.modules)) else 0)"],
                           cwd=os.path.dirname(os.path.abspath(__file__)),
-                          capture_output=True)
+                          capture_output=True, timeout=60)
     assert proc.returncode == 0
 
 

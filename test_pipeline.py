@@ -6,6 +6,7 @@
 
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import traceback
@@ -644,8 +645,9 @@ def _bjt(*args):
     return datetime(*args, tzinfo=trigger_status.BJT)
 
 
-def _run(created_at, conclusion="success", status="completed"):
-    return {"created_at": created_at, "conclusion": conclusion, "status": status}
+def _run(created_at, conclusion="success", status="completed", html_url=None):
+    return {"created_at": created_at, "conclusion": conclusion, "status": status,
+            "html_url": html_url}
 
 
 def _patch_runs(payload):
@@ -677,7 +679,9 @@ def test_check_primary_ok_when_today_run_succeeded():
     assert status == trigger_status.PRIMARY_OK
 
 
-def test_check_primary_missing_when_today_run_failed():
+def test_check_primary_failed_when_today_run_failed():
+    """今天跑了但失败,是 FAILED 而不是 MISSING —— 原先两者混为一谈,
+    告警因此把"跑挂了"误诊成"没触发",让人去查 PAT 而不是看运行日志。"""
     restore = _patch_runs({"workflow_runs": [
         _run("2026-09-22T00:57:00Z", conclusion="failure")]})
     try:
@@ -686,7 +690,7 @@ def test_check_primary_missing_when_today_run_failed():
     finally:
         restore()
 
-    assert status == trigger_status.PRIMARY_MISSING
+    assert status == trigger_status.PRIMARY_FAILED
 
 
 def test_check_primary_ok_while_today_run_is_still_running():
@@ -760,6 +764,80 @@ def test_check_primary_unknown_on_unexpected_payload():
     assert status == trigger_status.PRIMARY_UNKNOWN
 
 
+def test_check_primary_failed_when_all_today_runs_failed():
+    """今天有记录但全失败 → FAILED(与"压根没触发"分开)。"""
+    restore = _patch_runs({"workflow_runs": [
+        _run("2026-09-22T02:10:00Z", conclusion="cancelled"),
+        _run("2026-09-22T00:57:00Z", conclusion="failure")]})
+    try:
+        status = trigger_status.check_primary_today(now=_bjt(2026, 9, 22, 9, 11),
+                                                    repo="owner/repo", token="")
+    finally:
+        restore()
+
+    assert status == trigger_status.PRIMARY_FAILED
+
+
+def test_check_primary_ok_when_one_of_today_runs_succeeded():
+    """一次失败一次成功(比如失败后重跑过)→ OK,不能因为有过失败就告警。"""
+    restore = _patch_runs({"workflow_runs": [
+        _run("2026-09-22T02:10:00Z", conclusion="failure"),
+        _run("2026-09-22T00:57:00Z")]})
+    try:
+        status = trigger_status.check_primary_today(now=_bjt(2026, 9, 22, 9, 11),
+                                                    repo="owner/repo", token="")
+    finally:
+        restore()
+
+    assert status == trigger_status.PRIMARY_OK
+
+
+def test_evaluate_primary_returns_newest_today_run_url():
+    """API 按时间倒序返回,取今天最近一次运行的链接:失败时直接点进日志。"""
+    newest = "https://github.com/owner/repo/actions/runs/2"
+    restore = _patch_runs({"workflow_runs": [
+        _run("2026-09-22T02:10:00Z", conclusion="failure", html_url=newest),
+        _run("2026-09-22T00:57:00Z", conclusion="failure",
+             html_url="https://github.com/owner/repo/actions/runs/1")]})
+    try:
+        verdict = trigger_status.evaluate_primary_today(now=_bjt(2026, 9, 22, 9, 11),
+                                                        repo="owner/repo", token="")
+    finally:
+        restore()
+
+    assert verdict.status == trigger_status.PRIMARY_FAILED
+    assert verdict.run_url == newest
+
+
+def test_evaluate_primary_run_url_is_none_without_today_run():
+    """昨天那次运行的链接不能拿来当"今天失败的运行"。"""
+    restore = _patch_runs({"workflow_runs": [
+        _run("2026-09-21T15:59:00Z", conclusion="failure",
+             html_url="https://github.com/owner/repo/actions/runs/old")]})
+    try:
+        verdict = trigger_status.evaluate_primary_today(now=_bjt(2026, 9, 22, 9, 11),
+                                                        repo="owner/repo", token="")
+    finally:
+        restore()
+
+    assert verdict.status == trigger_status.PRIMARY_MISSING
+    assert verdict.run_url is None
+
+
+def test_evaluate_primary_run_url_is_none_when_field_missing():
+    """运行记录里没有 html_url 时返回 None,而不是半个链接。"""
+    restore = _patch_runs({"workflow_runs": [
+        _run("2026-09-22T00:57:00Z", conclusion="failure")]})
+    try:
+        verdict = trigger_status.evaluate_primary_today(now=_bjt(2026, 9, 22, 9, 11),
+                                                        repo="owner/repo", token="")
+    finally:
+        restore()
+
+    assert verdict.status == trigger_status.PRIMARY_FAILED
+    assert verdict.run_url is None
+
+
 def test_trigger_status_exit_code_is_zero_only_when_ok():
     """workflow 门禁靠退出码判断:只有 OK 才算"主链没问题"。"""
     original = trigger_status.check_primary_today
@@ -773,14 +851,29 @@ def test_trigger_status_exit_code_is_zero_only_when_ok():
         trigger_status.check_primary_today = original
 
 
+def test_trigger_status_exit_code_nonzero_when_failed():
+    """FAILED 也必须非 0:门禁放行兜底推送(宁可重复,不可漏报),
+    区别只在告警文案,不在"推不推"。"""
+    original = trigger_status.check_primary_today
+    try:
+        trigger_status.check_primary_today = lambda *a, **k: trigger_status.PRIMARY_FAILED
+        assert trigger_status.main() == 1
+    finally:
+        trigger_status.check_primary_today = original
+
+
 # --------------------------------------------------------------------------
 # watchdog:主链没成功时告警
 # --------------------------------------------------------------------------
 
-def _patch_watchdog(status, alert_result=True):
-    """替换看门狗的"查状态""读配置""发告警",返回 (calls, restore)。"""
+def _patch_watchdog(status, alert_result=True, run_url=None):
+    """替换看门狗的"查状态""读配置""发告警",返回 (calls, restore)。
+
+    看门狗现在调的是 evaluate_primary_today(它要多带一个运行链接),
+    所以这里替身也必须返回 PrimaryVerdict 而不是裸字符串。
+    """
     calls = []
-    original_check = watchdog.trigger_status.check_primary_today
+    original_evaluate = watchdog.trigger_status.evaluate_primary_today
     original_alert = watchdog.main.send_alert
     original_config = watchdog.main.load_config
 
@@ -788,13 +881,14 @@ def _patch_watchdog(status, alert_result=True):
         calls.append((title, desp, sendkeys))
         return alert_result
 
-    watchdog.trigger_status.check_primary_today = lambda *a, **k: status
+    watchdog.trigger_status.evaluate_primary_today = lambda *a, **k: \
+        trigger_status.PrimaryVerdict(status, run_url)
     watchdog.main.send_alert = fake_alert
     watchdog.main.load_config = lambda *a, **k: {
         "notifications": {"sendkeys": ["KEY1"]}}
 
     def restore():
-        watchdog.trigger_status.check_primary_today = original_check
+        watchdog.trigger_status.evaluate_primary_today = original_evaluate
         watchdog.main.send_alert = original_alert
         watchdog.main.load_config = original_config
 
@@ -839,6 +933,48 @@ def test_watchdog_alert_differs_when_status_unknown():
     assert "无法确认" in calls[0][0]
 
 
+def test_watchdog_alert_distinguishes_failed_run_from_missing():
+    """链跑了但失败,不能说成"没触发":那是误诊,会把人引向 PAT 而不是日志。"""
+    calls, restore = _patch_watchdog(trigger_status.PRIMARY_FAILED)
+    try:
+        code = watchdog.run()
+    finally:
+        restore()
+
+    assert code == 0
+    assert len(calls) == 1
+    title, desp, _ = calls[0]
+    assert "失败" in title
+    assert "失败" in desp
+    assert "没触发" in desp
+    assert "无法确认" not in desp
+
+
+def test_watchdog_failed_alert_includes_run_url():
+    """失败告警必须能一键点进那次运行看日志。"""
+    url = "https://github.com/owner/repo/actions/runs/123"
+    calls, restore = _patch_watchdog(trigger_status.PRIMARY_FAILED, run_url=url)
+    try:
+        watchdog.run()
+    finally:
+        restore()
+
+    assert len(calls) == 1
+    assert url in calls[0][1]
+
+
+def test_watchdog_failed_alert_without_run_url_stays_clean():
+    """拿不到链接时不能留一句"运行记录:None"半截话。"""
+    calls, restore = _patch_watchdog(trigger_status.PRIMARY_FAILED)
+    try:
+        watchdog.run()
+    finally:
+        restore()
+
+    assert len(calls) == 1
+    assert "运行记录" not in calls[0][1]
+
+
 def test_watchdog_fails_when_alert_could_not_be_sent():
     calls, restore = _patch_watchdog(trigger_status.PRIMARY_MISSING,
                                      alert_result=False)
@@ -849,6 +985,19 @@ def test_watchdog_fails_when_alert_could_not_be_sent():
 
     assert code == 1
     assert len(calls) == 1
+
+
+# --------------------------------------------------------------------------
+# 告警链的依赖边界:告警不能跟着 AI 依赖一起死
+# --------------------------------------------------------------------------
+
+def test_importing_main_does_not_pull_in_analysis():
+    """告警链只依赖 main/trigger_status:openai 装不上也必须能发出告警。"""
+    proc = subprocess.run([sys.executable, "-c",
+                           "import main, sys; sys.exit(1 if 'analysis' in sys.modules else 0)"],
+                          cwd=os.path.dirname(os.path.abspath(__file__)),
+                          capture_output=True)
+    assert proc.returncode == 0
 
 
 # --------------------------------------------------------------------------

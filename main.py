@@ -5,8 +5,6 @@ import requests
 import yaml
 from datetime import date
 
-from analysis import analyze
-
 
 _DEFAULT_CONFIG = {
     "analysis": {"enabled": False, "model": "deepseek-chat"},
@@ -230,6 +228,10 @@ def send_alert(title, desp, sendkeys=None):
 
 
 def main():
+    # 延迟导入:analysis 会拉起 openai,而告警链(watchdog.py)只 import 本模块。
+    # 若把它放在模块顶层,openai 一旦装不上,主链、兜底和告警会一起哑掉。
+    from analysis import analyze
+
     print("[INFO] 开始检查今日新债...")
     config = load_config()
     bonds, error = fetch_new_bonds()

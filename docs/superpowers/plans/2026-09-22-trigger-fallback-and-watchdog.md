@@ -4,7 +4,7 @@
 
 **Goal:** 修复早上 8:57 的主触发链,并在它失效时既能兜底补推、又能发出告警,正常日子不重复推送。
 
-**Architecture:** Cloudflare Worker 的 cron 改为每天 08:57 触发 `repository_dispatch`(主链)。新增 `trigger_status.py` 判断"今天主链是否已成功",返回三态;`schedule.yml` 用它做去重门禁(GitHub schedule 只在主链没成功时才补推);新增 `watchdog.yml` + `watchdog.py` 在 09:11 检查同一状态,异常时用 Server酱 告警。
+**Architecture:** Cloudflare Worker 的 cron 改为每天 08:57 触发 `repository_dispatch`(主链)。新增 `trigger_status.py` 判断"今天主链是否已成功",返回四态(`PRIMARY_OK` / `PRIMARY_MISSING` / `PRIMARY_FAILED` / `PRIMARY_UNKNOWN`);`schedule.yml` 用它做去重门禁(GitHub schedule 只在主链没成功时才补推);新增 `watchdog.yml` + `watchdog.py` 在 09:11 检查同一状态,异常时用 Server酱 告警。
 
 **Tech Stack:** Python 3.12(标准库 + `requests`)、GitHub Actions、Cloudflare Workers cron、yaml/toml 配置。
 
@@ -780,6 +780,10 @@ git commit -m "fix: Cloudflare cron 改为每天触发,绕开星期字段 1=周�
 - [ ] **Step 1: 改 cron 并加门禁**
 
 `.github/workflows/schedule.yml` 全文替换为:
+
+> **实际落地的文件里,`运行回归测试` 在 job 的最后一步(推送之后),不是下面片段里的位置。**
+> 测试排在推送前面时,一次测试失败会跳过它后面所有步骤,把当天的最后一道提醒整个吞掉 ——
+> 测试失败不能挡住最后一道提醒。下面是当时的实现记录,照抄时不要连步骤顺序一起抄。
 
 ```yaml
 name: 打新债提醒

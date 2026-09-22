@@ -171,6 +171,8 @@ CLI:`python trigger_status.py`,退出码 0 = `PRIMARY_OK`,非 0 = 其他(供 wor
 
 只由自己的 cron(`11 1 * * 1-5`,即 09:11 北京)和 `workflow_dispatch` 触发,**不订阅 `repository_dispatch`** —— 它的运行不会污染 `event=repository_dispatch` 的状态查询,也不会在主链正常时产生噪音。
 
+**安装依赖步骤刻意只装 `requests` + `pyyaml`,不是 `pip install -r requirements.txt`。** 后者含 `openai`,一旦装不上(未钉版本的 `openai>=1.0.0` 变得不兼容、PyPI 抖动),job 会在 `watchdog.py` 跑起来之前就死掉,一条告警都发不出 —— 那是与缺陷 4 同一类的复合静默失效,只是从 `import` 挪到了安装步骤。**不要为了"和其它 workflow 保持一致"把它改回 `requirements.txt`。**
+
 ### 注释约定
 
 两处 cron 的星期字段语义相反,必须在文件内写明:

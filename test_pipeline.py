@@ -13,6 +13,7 @@ from datetime import date, datetime
 
 import analysis
 import trigger_status
+import watchdog
 import main as m
 from analysis import (
     _build_bond_line,
@@ -770,6 +771,84 @@ def test_trigger_status_exit_code_is_zero_only_when_ok():
             assert trigger_status.main() == expected
     finally:
         trigger_status.check_primary_today = original
+
+
+# --------------------------------------------------------------------------
+# watchdog:主链没成功时告警
+# --------------------------------------------------------------------------
+
+def _patch_watchdog(status, alert_result=True):
+    """替换看门狗的"查状态""读配置""发告警",返回 (calls, restore)。"""
+    calls = []
+    original_check = watchdog.trigger_status.check_primary_today
+    original_alert = watchdog.main.send_alert
+    original_config = watchdog.main.load_config
+
+    def fake_alert(title, desp, sendkeys=None):
+        calls.append((title, desp, sendkeys))
+        return alert_result
+
+    watchdog.trigger_status.check_primary_today = lambda *a, **k: status
+    watchdog.main.send_alert = fake_alert
+    watchdog.main.load_config = lambda *a, **k: {
+        "notifications": {"sendkeys": ["KEY1"]}}
+
+    def restore():
+        watchdog.trigger_status.check_primary_today = original_check
+        watchdog.main.send_alert = original_alert
+        watchdog.main.load_config = original_config
+
+    return calls, restore
+
+
+def test_watchdog_stays_silent_when_primary_ok():
+    calls, restore = _patch_watchdog(trigger_status.PRIMARY_OK)
+    try:
+        code = watchdog.run()
+    finally:
+        restore()
+
+    assert code == 0
+    assert calls == []
+
+
+def test_watchdog_alerts_when_primary_missing():
+    calls, restore = _patch_watchdog(trigger_status.PRIMARY_MISSING)
+    try:
+        code = watchdog.run()
+    finally:
+        restore()
+
+    assert code == 0
+    assert len(calls) == 1
+    title, desp, sendkeys = calls[0]
+    assert "触发链" in title
+    assert "GITHUB_TOKEN" in desp
+    assert sendkeys == ["KEY1"]
+
+
+def test_watchdog_alert_differs_when_status_unknown():
+    """查不到状态不能说成"主链挂了",否则是撒谎。"""
+    calls, restore = _patch_watchdog(trigger_status.PRIMARY_UNKNOWN)
+    try:
+        watchdog.run()
+    finally:
+        restore()
+
+    assert len(calls) == 1
+    assert "无法确认" in calls[0][0]
+
+
+def test_watchdog_fails_when_alert_could_not_be_sent():
+    calls, restore = _patch_watchdog(trigger_status.PRIMARY_MISSING,
+                                     alert_result=False)
+    try:
+        code = watchdog.run()
+    finally:
+        restore()
+
+    assert code == 1
+    assert len(calls) == 1
 
 
 # --------------------------------------------------------------------------

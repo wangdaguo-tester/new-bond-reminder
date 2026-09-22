@@ -852,8 +852,10 @@ jobs:
 
 - [ ] **Step 2: 校验 YAML 语法与门禁表达式**
 
-Run: `python -c "import yaml; d=yaml.safe_load(open('.github/workflows/schedule.yml',encoding='utf-8')); print(d['on']['schedule'])"`
+Run: `python -c "import yaml; d=yaml.safe_load(open('.github/workflows/schedule.yml',encoding='utf-8')); print(d[True]['schedule'])"`
 Expected: `[{'cron': '23 1 * * 1-5'}]`
+
+注意必须用 `d[True]` 而不是 `d['on']`:PyYAML 按 YAML 1.1 把裸写的 `on` 解析成布尔 `True`。这是 GitHub workflow 文件的通例(旧版本文件同样如此),不是文件写错了,不要为了迁就校验命令去给 `on:` 加引号。
 
 Run: `grep -n "event_name == 'schedule'" .github/workflows/schedule.yml`
 Expected: 命中 1 行(门禁的事件判断存在)
@@ -921,8 +923,10 @@ jobs:
 
 - [ ] **Step 2: 校验 YAML 语法**
 
-Run: `python -c "import yaml; d=yaml.safe_load(open('.github/workflows/watchdog.yml',encoding='utf-8')); print(d['on']['schedule'], list(d['jobs']))"`
+Run: `python -c "import yaml; d=yaml.safe_load(open('.github/workflows/watchdog.yml',encoding='utf-8')); print(d[True]['schedule'], list(d['jobs']))"`
 Expected: `[{'cron': '11 1 * * 1-5'}] ['check']`
+
+同 Task 5:裸写的 `on` 被 PyYAML 解析成布尔 `True`,校验要用 `d[True]`。
 
 - [ ] **Step 3: 用真实 API 验证判断逻辑(只读,不推送)**
 

@@ -1,0 +1,38 @@
+name: 触发链看门狗
+
+on:
+  schedule:
+    # UTC 1:11 = 北京时间 9:11,周一到周五(主链 8:57 之后 14 分钟)。
+    # 只订阅 schedule 与手动触发:如果它也订阅 repository_dispatch,
+    # 查询"今天的主链运行"时会查到本次运行本身,从而永远不告警。
+    - cron: "11 1 * * 1-5"
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+permissions:
+  contents: read    # actions/checkout 需要
+  actions: read     # trigger_status 读本仓库的运行记录需要
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout 代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 安装依赖
+        run: pip install -r requirements.txt
+
+      # 这里刻意不跑回归测试:告警链自己不能因为测试挂掉而发不出告警。
+      - name: 检查主链并告警
+        env:
+          SENDKEY: ${{ secrets.SENDKEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python watchdog.py

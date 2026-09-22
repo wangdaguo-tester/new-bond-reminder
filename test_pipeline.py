@@ -9,9 +9,10 @@ import os
 import sys
 import tempfile
 import traceback
-from datetime import date
+from datetime import date, datetime
 
 import analysis
+import trigger_status
 import main as m
 from analysis import (
     _build_bond_line,
@@ -632,6 +633,143 @@ def test_build_message_all_none_analyses_falls_back():
     title, desp = m.build_message(bonds, [None])
     assert title == "🏦 今日有新债可申购！"
     assert "AI 分析暂时不可用" in desp
+
+
+# --------------------------------------------------------------------------
+# trigger_status:判断今天主链是否已成功
+# --------------------------------------------------------------------------
+
+def _bjt(*args):
+    return datetime(*args, tzinfo=trigger_status.BJT)
+
+
+def _run(created_at, conclusion="success", status="completed"):
+    return {"created_at": created_at, "conclusion": conclusion, "status": status}
+
+
+def _patch_runs(payload):
+    """把 trigger_status.requests.get 换成返回固定 payload 的假实现。"""
+    original = trigger_status.requests.get
+    trigger_status.requests.get = lambda *a, **k: _FakeResp(payload)
+    return lambda: setattr(trigger_status.requests, "get", original)
+
+
+def _patch_runs_error():
+    """让 trigger_status.requests.get 抛请求异常。"""
+    original = trigger_status.requests.get
+
+    def fake_get(*args, **kwargs):
+        raise trigger_status.requests.RequestException("simulated failure")
+
+    trigger_status.requests.get = fake_get
+    return lambda: setattr(trigger_status.requests, "get", original)
+
+
+def test_check_primary_ok_when_today_run_succeeded():
+    restore = _patch_runs({"workflow_runs": [_run("2026-09-22T00:57:00Z")]})
+    try:
+        status = trigger_status.check_primary_today(now=_bjt(2026, 9, 22, 9, 11),
+                                                    repo="owner/repo", token="")
+    finally:
+        restore()
+
+    assert status == trigger_status.PRIMARY_OK
+
+
+def test_check_primary_missing_when_today_run_failed():
+    restore = _patch_runs({"workflow_runs": [
+        _run("2026-09-22T00:57:00Z", conclusion="failure")]})
+    try:
+        status = trigger_status.check_primary_today(now=_bjt(2026, 9, 22, 9, 11),
+                                                    repo="owner/repo", token="")
+    finally:
+        restore()
+
+    assert status == trigger_status.PRIMARY_MISSING
+
+
+def test_check_primary_ok_while_today_run_is_still_running():
+    """主链正在跑的时候,兜底不能抢跑,否则会重复推送。"""
+    restore = _patch_runs({"workflow_runs": [
+        _run("2026-09-22T00:57:00Z", conclusion=None, status="in_progress")]})
+    try:
+        status = trigger_status.check_primary_today(now=_bjt(2026, 9, 22, 9, 11),
+                                                    repo="owner/repo", token="")
+    finally:
+        restore()
+
+    assert status == trigger_status.PRIMARY_OK
+
+
+def test_check_primary_missing_when_only_yesterdays_run():
+    """UTC 15:59 = 北京 23:59,算昨天。"""
+    restore = _patch_runs({"workflow_runs": [_run("2026-09-21T15:59:00Z")]})
+    try:
+        status = trigger_status.check_primary_today(now=_bjt(2026, 9, 22, 9, 11),
+                                                    repo="owner/repo", token="")
+    finally:
+        restore()
+
+    assert status == trigger_status.PRIMARY_MISSING
+
+
+def test_check_primary_counts_utc16_as_today_in_beijing():
+    """UTC 16:00 = 北京次日 00:00,算今天。"""
+    restore = _patch_runs({"workflow_runs": [_run("2026-09-21T16:00:00Z")]})
+    try:
+        status = trigger_status.check_primary_today(now=_bjt(2026, 9, 22, 9, 11),
+                                                    repo="owner/repo", token="")
+    finally:
+        restore()
+
+    assert status == trigger_status.PRIMARY_OK
+
+
+def test_check_primary_unknown_on_request_error():
+    restore = _patch_runs_error()
+    try:
+        status = trigger_status.check_primary_today(now=_bjt(2026, 9, 22, 9, 11),
+                                                    repo="owner/repo", token="")
+    finally:
+        restore()
+
+    assert status == trigger_status.PRIMARY_UNKNOWN
+
+
+def test_check_primary_unknown_without_repo():
+    original = os.environ.pop("GITHUB_REPOSITORY", None)
+    try:
+        status = trigger_status.check_primary_today(now=_bjt(2026, 9, 22, 9, 11),
+                                                    repo=None)
+    finally:
+        if original is not None:
+            os.environ["GITHUB_REPOSITORY"] = original
+
+    assert status == trigger_status.PRIMARY_UNKNOWN
+
+
+def test_check_primary_unknown_on_unexpected_payload():
+    restore = _patch_runs({"message": "Not Found"})
+    try:
+        status = trigger_status.check_primary_today(now=_bjt(2026, 9, 22, 9, 11),
+                                                    repo="owner/repo", token="")
+    finally:
+        restore()
+
+    assert status == trigger_status.PRIMARY_UNKNOWN
+
+
+def test_trigger_status_exit_code_is_zero_only_when_ok():
+    """workflow 门禁靠退出码判断:只有 OK 才算"主链没问题"。"""
+    original = trigger_status.check_primary_today
+    try:
+        for status, expected in ((trigger_status.PRIMARY_OK, 0),
+                                 (trigger_status.PRIMARY_MISSING, 1),
+                                 (trigger_status.PRIMARY_UNKNOWN, 1)):
+            trigger_status.check_primary_today = lambda *a, **k: status
+            assert trigger_status.main() == expected
+    finally:
+        trigger_status.check_primary_today = original
 
 
 # --------------------------------------------------------------------------

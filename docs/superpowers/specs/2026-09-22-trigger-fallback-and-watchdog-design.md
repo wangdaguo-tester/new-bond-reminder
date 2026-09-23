@@ -78,9 +78,27 @@ GitHub 官方文档明确说明:
 ### wrangler.toml
 
 ```toml
+[vars]
+GITHUB_OWNER = "wangdaguo-tester"
+GITHUB_REPO = "new-bond-reminder"
+
 [triggers]
 crons = ["57 0 * * *"]
 ```
+
+`GITHUB_OWNER` / `GITHUB_REPO` 必须在这里声明(它们不是敏感信息,仓库本身是公开的)。**2026-09-23 的第二次静默失效就是这两个值丢了造成的**:它们此前只在 Cloudflare Dashboard 里手填过,而 `wrangler deploy` 会用本文件的声明**替换** Worker 的绑定 —— 没被声明的绑定会被抹掉。于是 `trigger.js` 拼出 `/repos/undefined/undefined/dispatches`,拿到 404,只打一行日志,那天(有 2 只新债)的提醒静默消失。写进配置后每次 deploy 都会重新应用,不会再丢。
+
+### trigger.js(新增:环境变量守卫 + 失败告警)
+
+这条链已经静默失效过两次(缺陷 1 的 PAT 过期、以及 2026-09-23 的绑定丢失),两次都是"只打一行日志、没人看得见"。因此:
+
+1. **守卫** —— `GITHUB_OWNER` / `GITHUB_REPO` / `GITHUB_TOKEN` 任一为空就立刻明确报错并返回,绝不拿 `undefined` 去拼 URL。这三个是 dispatch 成功的必要条件。
+2. **失败告警** —— 守卫失败、dispatch 返回非 2xx、或请求抛异常时,直接调 Server酱 推一条告警(`SERVERCHAN_SENDKEY`,用 `wrangler secret put` 配置),正文带状态码与排查方向。
+
+两条刻意的设计:
+
+- `SERVERCHAN_SENDKEY` **不在**必填列表里。告警是辅助设施,缺它顶多在失败时没人喊;**绝不能因为少一个告警 key 就把真正的提醒一起掐掉**。
+- Worker 内告警与 `watchdog.yml` 是**有意的冗余**:前者秒级、且知道具体状态码;后者独立于 Cloudflare,能覆盖"Worker 被删 / 绑定丢失 / Worker 自己发不出声"这类情况。链路坏掉的那天你会收到两条告警 —— 这是设计,不是重复。
 
 ### trigger_status.py(新增)
 
@@ -220,8 +238,7 @@ CLI:`python trigger_status.py`,退出码 0 = `PRIMARY_OK`,非 0 = 其他(供 wor
 
 ## 不涉及
 
-- Worker 内告警(已评估,覆盖不全:Worker 被删时它没机会发出任何东西)
-- `trigger.js` 的重试逻辑
+- Worker 的自动重试(失败就告警,不重试)
 - 去重状态落盘(不引入任何持久化状态)
 - `analysis.py`、`requirements.txt`
 - `config.yaml` 中明文 SendKey 的处理(见下)
@@ -234,13 +251,18 @@ CLI:`python trigger_status.py`,退出码 0 = `PRIMARY_OK`,非 0 = 其他(供 wor
 # 1. 生成新 PAT(fine-grained 勾 Contents: Read and write;或 classic 勾 repo)
 #    ⚠️ 有效期不要再选默认的 30 天
 wrangler login
-wrangler secret put GITHUB_TOKEN   # → 新 PAT
-wrangler deploy                    # 必须重新部署,cron 改动才会生效
+wrangler secret put GITHUB_TOKEN          # → 新 PAT
+wrangler secret put SERVERCHAN_SENDKEY    # → 告警用的 SendKey(SCT...)
+wrangler deploy                            # 必须重新部署:cron 与 [vars] 才会生效
 
 # 2. 验证
 wrangler tail                       # 观察下一次触发
 ```
 
+`GITHUB_OWNER` / `GITHUB_REPO` 不再需要 `wrangler secret put` —— 它们已经在 `wrangler.toml` 的 `[vars]` 里声明。
+
 ## 遗留风险(不在本次范围)
 
 仓库为 public,而 `config.yaml` 明文包含 SendKey,任何人都可读取并冒用推送。`1b00dbd` 曾试图清除该明文,随后被 `4d94450` revert。建议单独处理。
+
+该 SendKey 现在存在于**三处**:`config.yaml`、GitHub 的 `SENDKEY` secret、Cloudflare 的 `SERVERCHAN_SENDKEY` secret。将来轮换必须三处同改,漏掉任何一处都会让对应那条链哑掉。
